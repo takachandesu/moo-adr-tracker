@@ -1,11 +1,5 @@
 """
 日本株ADR乖離率データ取得スクリプト
-
-各ADRについて:
-  NY終値(USD) × USDJPY(NY引け) ÷ ADR比率 ÷ 東京終値(JPY) − 1
-を計算し、ベスト20・ワースト20を JSON に書き出す。
-
-出力: public/adr-data.json
 """
 
 from __future__ import annotations
@@ -32,10 +26,8 @@ def load_master() -> dict:
         return json.load(f)
 
 
-def _scalar(val) -> float | None:
-    """Series/array/スカラー何でもfloatに変換。失敗時None。"""
+def _scalar(val):
     try:
-        # Seriesやリスト等が来た場合、先頭要素を取る
         while hasattr(val, "iloc"):
             val = val.iloc[0] if len(val) > 0 else None
         while isinstance(val, (list, tuple)):
@@ -47,13 +39,11 @@ def _scalar(val) -> float | None:
         return None
 
 
-def latest_close(df: pd.DataFrame, ticker: str | None = None) -> float | None:
-    """yfinanceのレスポンスから最新終値を返す。失敗時None。"""
+def latest_close(df, ticker=None):
     try:
         if df is None or df.empty:
             return None
         if ticker and isinstance(df.columns, pd.MultiIndex):
-            # MultiIndex: 上位レベルがticker、下位がOHLCV
             lvl0 = set(df.columns.get_level_values(0))
             if ticker in lvl0:
                 sub = df[ticker]
@@ -61,16 +51,14 @@ def latest_close(df: pd.DataFrame, ticker: str | None = None) -> float | None:
                     series = sub["Close"].dropna()
                 else:
                     return None
-            else:
-                # 上位レベルがOHLCV、下位がticker
-                if "Close" in lvl0:
-                    close = df["Close"]
-                    if ticker in close.columns:
-                        series = close[ticker].dropna()
-                    else:
-                        return None
+            elif "Close" in lvl0:
+                close = df["Close"]
+                if ticker in close.columns:
+                    series = close[ticker].dropna()
                 else:
                     return None
+            else:
+                return None
         else:
             close = df["Close"]
             if isinstance(close, pd.DataFrame):
@@ -83,8 +71,7 @@ def latest_close(df: pd.DataFrame, ticker: str | None = None) -> float | None:
         return None
 
 
-def latest_date(df: pd.DataFrame, ticker: str | None = None) -> str | None:
-    """最新終値の日付（YYYY-MM-DD）を返す。"""
+def latest_date(df, ticker=None):
     try:
         if df is None or df.empty:
             return None
@@ -108,8 +95,7 @@ def latest_date(df: pd.DataFrame, ticker: str | None = None) -> str | None:
         return None
 
 
-def batch_download(tickers: list[str], period: str = "10d") -> pd.DataFrame:
-    """銘柄をまとめて取得。失敗時は軽くリトライ。"""
+def batch_download(tickers, period="10d"):
     for attempt in range(3):
         try:
             df = yf.download(
@@ -128,8 +114,7 @@ def batch_download(tickers: list[str], period: str = "10d") -> pd.DataFrame:
     return pd.DataFrame()
 
 
-def fetch_usdjpy() -> float | None:
-    """NY引け時刻に近いUSDJPY終値を取得。yf.Ticker().history()で安定取得。"""
+def fetch_usdjpy():
     try:
         t = yf.Ticker("JPY=X")
         hist = t.history(period="10d", auto_adjust=False)
@@ -144,7 +129,7 @@ def fetch_usdjpy() -> float | None:
         return None
 
 
-def compute_divergence(adr: dict, us_df: pd.DataFrame, jp_df: pd.DataFrame, fx: float) -> dict | None:
+def compute_divergence(adr, us_df, jp_df, fx):
     us_ticker = adr["ticker"]
     jp_ticker = adr["jp_ticker"]
     ratio = float(adr.get("adr_ratio", 1.0))
@@ -179,37 +164,37 @@ def compute_divergence(adr: dict, us_df: pd.DataFrame, jp_df: pd.DataFrame, fx: 
     }
 
 
-def main() -> int:
-    print(f"[info] fetch start: {datetime.now(JST).isoformat()}")
+def main():
+    print(f"[info] fetch start: {datetime.now(JST).isoformat()}", flush=True)
 
     master = load_master()
     adrs = master["adrs"]
-    print(f"[info] master count: {len(adrs)}")
+    print(f"[info] master count: {len(adrs)}", flush=True)
 
     us_tickers = [a["ticker"] for a in adrs]
     jp_tickers = [a["jp_ticker"] for a in adrs if a["jp_ticker"]]
 
-    print("[info] fetching USD/JPY ...")
+    print("[info] fetching USD/JPY ...", flush=True)
     fx = fetch_usdjpy()
     if fx is None:
-        print("[error] USD/JPY fetch failed", file=sys.stderr)
+        print("[error] USD/JPY fetch failed", file=sys.stderr, flush=True)
         return 1
-    print(f"[info] USD/JPY = {fx:.4f}")
+    print(f"[info] USD/JPY = {fx:.4f}", flush=True)
 
-    print(f"[info] fetching {len(us_tickers)} US ADRs ...")
+    print(f"[info] fetching {len(us_tickers)} US ADRs ...", flush=True)
     us_df = batch_download(us_tickers, period="10d")
     if us_df.empty:
-        print("[error] US ADR fetch failed", file=sys.stderr)
+        print("[error] US ADR fetch failed", file=sys.stderr, flush=True)
         return 1
 
-    print(f"[info] fetching {len(jp_tickers)} Tokyo stocks ...")
+    print(f"[info] fetching {len(jp_tickers)} Tokyo stocks ...", flush=True)
     jp_df = batch_download(jp_tickers, period="10d")
     if jp_df.empty:
-        print("[error] Tokyo stocks fetch failed", file=sys.stderr)
+        print("[error] Tokyo stocks fetch failed", file=sys.stderr, flush=True)
         return 1
 
-    results: list[dict] = []
-    skipped: list[str] = []
+    results = []
+    skipped = []
     for adr in adrs:
         row = compute_divergence(adr, us_df, jp_df, fx)
         if row is None:
@@ -217,10 +202,36 @@ def main() -> int:
         else:
             results.append(row)
 
-    print(f"[info] computed: {len(results)} / skipped: {len(skipped)}")
-    if skipped:
-        print(f"[info] skipped tickers: {', '.join(skipped)}")
+    print(f"[info] computed: {len(results)} / skipped: {len(skipped)}", flush=True)
 
     anomalies = [r for r in results if abs(r["divergence_pct"]) > 15.0]
     if anomalies:
-        print(f"[warn] {len(anomalies)} 銘柄で異常乖離(>15%)を検出。ADR比率の設定を確認してください:")
+        print(f"[warn] {len(anomalies)} anomalies (>15%):", flush=True)
+        for a in sorted(anomalies, key=lambda x: abs(x["divergence_pct"]), reverse=True):
+            print(f"  {a['ticker']} ({a['jp_ticker']}) {a['name_jp']}: {a['divergence_pct']:+.2f}%", flush=True)
+
+    results.sort(key=lambda x: x["divergence_pct"], reverse=True)
+
+    best = results[:20]
+    worst = list(reversed(results[-20:])) if len(results) >= 20 else list(reversed(results))
+
+    output = {
+        "updated_at": datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S JST"),
+        "usdjpy": round(fx, 2),
+        "total_count": len(results),
+        "skipped_count": len(skipped),
+        "best": best,
+        "worst": worst,
+        "all": results,
+    }
+
+    OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with OUTPUT_PATH.open("w", encoding="utf-8") as f:
+        json.dump(output, f, ensure_ascii=False, indent=2)
+
+    print(f"[info] wrote {OUTPUT_PATH}", flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
