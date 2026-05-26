@@ -1,0 +1,64 @@
+name: Update ADR Data
+
+on:
+  schedule:
+    # ET 16:30（NYSE引け+30分）に実行。米国DST切替に対応するため2本立て。
+    #   - 20:30 UTC = EDT 16:30（3月〜11月の夏時間期間に有効）
+    #                  EST期間は 15:30 EST（NY引け前）なので空振りで害なし
+    #   - 21:30 UTC = EST 16:30（11月〜3月の標準時期間に有効）
+    #                  EDT期間は 17:30 EDT で2回目実行、Yahoo Financeから同じデータ取得で害なし
+    - cron: '30 20 * * 1-5'
+    - cron: '30 21 * * 1-5'
+  workflow_dispatch:  # GitHub UI からの手動実行も可
+
+# 同時実行は1つに制限（FTPアップロード競合を防ぐ）
+concurrency:
+  group: update-adr
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: scripts/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r scripts/requirements.txt
+
+      - name: Fetch ADR data
+        run: python scripts/fetch_adr_data.py
+
+      - name: Upload to Lolipop (FTP)
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
+        with:
+          server: ${{ secrets.LOLIPOP_FTP_HOST }}
+          username: ${{ secrets.LOLIPOP_FTP_USER }}
+          password: ${{ secrets.LOLIPOP_FTP_PASSWORD }}
+          local-dir: ./public/
+          server-dir: ${{ secrets.LOLIPOP_FTP_PATH }}
+          # 変更ファイルのみアップロード
+          dry-run: false
+          # 既存ファイルを削除しない
+          dangerous-clean-slate: false
+          # 同期ステート（差分アップロード用）
+          state-name: .ftp-deploy-sync-state.json
+
+      - name: Upload artifact (debug)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: adr-data-${{ github.run_number }}
+          path: public/adr-data.json
+          retention-days: 7
