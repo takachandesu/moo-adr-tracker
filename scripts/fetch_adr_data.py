@@ -32,27 +32,75 @@ def load_master() -> dict:
         return json.load(f)
 
 
-def latest_close(df: pd.DataFrame, ticker: str | None = None) -> float | None:
-    """yfinance のレスポンスから最新終値を返す。失敗時 None。"""
+def _scalar(val) -> float | None:
+    """Series/array/スカラー何でもfloatに変換。失敗時None。"""
     try:
+        # Seriesやリスト等が来た場合、先頭要素を取る
+        while hasattr(val, "iloc"):
+            val = val.iloc[0] if len(val) > 0 else None
+        while isinstance(val, (list, tuple)):
+            val = val[0] if val else None
+        if val is None or pd.isna(val):
+            return None
+        return float(val)
+    except Exception:
+        return None
+
+
+def latest_close(df: pd.DataFrame, ticker: str | None = None) -> float | None:
+    """yfinanceのレスポンスから最新終値を返す。失敗時None。"""
+    try:
+        if df is None or df.empty:
+            return None
         if ticker and isinstance(df.columns, pd.MultiIndex):
-            series = df[ticker]["Close"].dropna()
+            # MultiIndex: 上位レベルがticker、下位がOHLCV
+            lvl0 = set(df.columns.get_level_values(0))
+            if ticker in lvl0:
+                sub = df[ticker]
+                if "Close" in sub.columns:
+                    series = sub["Close"].dropna()
+                else:
+                    return None
+            else:
+                # 上位レベルがOHLCV、下位がticker
+                if "Close" in lvl0:
+                    close = df["Close"]
+                    if ticker in close.columns:
+                        series = close[ticker].dropna()
+                    else:
+                        return None
+                else:
+                    return None
         else:
-            series = df["Close"].dropna()
+            close = df["Close"]
+            if isinstance(close, pd.DataFrame):
+                close = close.iloc[:, 0]
+            series = close.dropna()
         if len(series) == 0:
             return None
-        return float(series.iloc[-1])
-    except (KeyError, AttributeError, IndexError):
+        return _scalar(series.iloc[-1])
+    except (KeyError, AttributeError, IndexError, TypeError):
         return None
 
 
 def latest_date(df: pd.DataFrame, ticker: str | None = None) -> str | None:
     """最新終値の日付（YYYY-MM-DD）を返す。"""
     try:
+        if df is None or df.empty:
+            return None
         if ticker and isinstance(df.columns, pd.MultiIndex):
-            series = df[ticker]["Close"].dropna()
+            lvl0 = set(df.columns.get_level_values(0))
+            if ticker in lvl0:
+                series = df[ticker]["Close"].dropna()
+            elif "Close" in lvl0:
+                series = df["Close"][ticker].dropna()
+            else:
+                return None
         else:
-            series = df["Close"].dropna()
+            close = df["Close"]
+            if isinstance(close, pd.DataFrame):
+                close = close.iloc[:, 0]
+            series = close.dropna()
         if len(series) == 0:
             return None
         return series.index[-1].strftime("%Y-%m-%d")
@@ -61,7 +109,7 @@ def latest_date(df: pd.DataFrame, ticker: str | None = None) -> str | None:
 
 
 def batch_download(tickers: list[str], period: str = "10d") -> pd.DataFrame:
-    """銘柄をまとめて取得。yfinance のレート制限対策で軽くリトライ。"""
+    """銘柄をまとめて取得。失敗時は軽くリトライ。"""
     for attempt in range(3):
         try:
             df = yf.download(
@@ -81,19 +129,27 @@ def batch_download(tickers: list[str], period: str = "10d") -> pd.DataFrame:
 
 
 def fetch_usdjpy() -> float | None:
-    """NY引け時刻に近い USDJPY 終値を取得。Yahoo の JPY=X を使用。"""
-    df = yf.download("JPY=X", period="10d", progress=False, auto_adjust=False)
-    return latest_close(df)
+    """NY引け時刻に近いUSDJPY終値を取得。yf.Ticker().history()で安定取得。"""
+    try:
+        t = yf.Ticker("JPY=X")
+        hist = t.history(period="10d", auto_adjust=False)
+        if hist is None or hist.empty:
+            return None
+        close = hist["Close"].dropna()
+        if len(close) == 0:
+            return None
+        return _scalar(close.iloc[-1])
+    except Exception as e:
+        print(f"[error] USD/JPY fetch failed: {e}", file=sys.stderr)
+        return None
 
 
 def compute_divergence(adr: dict, us_df: pd.DataFrame, jp_df: pd.DataFrame, fx: float) -> dict | None:
-    """1銘柄の乖離率を計算して結果dictを返す。データ不足時はNone。"""
     us_ticker = adr["ticker"]
     jp_ticker = adr["jp_ticker"]
     ratio = float(adr.get("adr_ratio", 1.0))
 
     if not jp_ticker:
-        # 東京市場非上場のレベル3 IPOなど。乖離率計算対象外。
         return None
 
     us_close = latest_close(us_df, us_ticker)
@@ -104,7 +160,6 @@ def compute_divergence(adr: dict, us_df: pd.DataFrame, jp_df: pd.DataFrame, fx: 
     if us_close is None or jp_close is None or jp_close <= 0 or ratio <= 0:
         return None
 
-    # NY終値の円換算（東京1株あたり）
     ny_implied_jp = (us_close * fx) / ratio
     divergence_pct = (ny_implied_jp / jp_close - 1.0) * 100.0
 
@@ -166,39 +221,6 @@ def main() -> int:
     if skipped:
         print(f"[info] skipped tickers: {', '.join(skipped)}")
 
-    # 異常乖離率の検出（ADR比率の設定ミスを早期発見するため）
-    # ±15%超は通常ありえないので、ADR比率の見直しが必要
     anomalies = [r for r in results if abs(r["divergence_pct"]) > 15.0]
     if anomalies:
         print(f"[warn] {len(anomalies)} 銘柄で異常乖離(>15%)を検出。ADR比率の設定を確認してください:")
-        for a in sorted(anomalies, key=lambda x: abs(x["divergence_pct"]), reverse=True):
-            print(f"  {a['ticker']} ({a['jp_ticker']}) {a['name_jp']}: {a['divergence_pct']:+.2f}%")
-
-    # 乖離率で降順ソート
-    results.sort(key=lambda x: x["divergence_pct"], reverse=True)
-
-    best = results[:20]
-    worst = list(reversed(results[-20:])) if len(results) >= 20 else list(reversed(results))
-
-    output = {
-        "updated_at": datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S JST"),
-        "usdjpy": round(fx, 2),
-        "total_count": len(results),
-        "skipped_count": len(skipped),
-        "best": best,
-        "worst": worst,
-        "all": results,  # 全件もJSONに保持（必要に応じて使用）
-    }
-
-    OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with OUTPUT_PATH.open("w", encoding="utf-8") as f:
-        json.dump(output, f, ensure_ascii=False, indent=2)
-
-    print(f"[info] wrote {OUTPUT_PATH}")
-    print(f"[info] top 3 best: {[(r['ticker'], r['divergence_pct']) for r in best[:3]]}")
-    print(f"[info] top 3 worst: {[(r['ticker'], r['divergence_pct']) for r in worst[:3]]}")
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())
