@@ -1,4 +1,4 @@
-"""日本株ADR乖離率データ取得スクリプト（自動比率推定版）"""
+"""日本株ADR乖離率データ取得スクリプト（中央値ベース推定版）"""
 
 from __future__ import annotations
 import json
@@ -14,9 +14,6 @@ ROOT = Path(__file__).resolve().parent.parent
 MASTER_PATH = ROOT / "scripts" / "adr_list.json"
 OUTPUT_PATH = ROOT / "public" / "adr-data.json"
 JST = timezone(timedelta(hours=9))
-
-_RATIO_BASE = [1, 2, 2.5, 4, 5, 8, 10, 20, 25, 50, 100, 200, 500, 1000]
-STANDARD_RATIOS = sorted(set(_RATIO_BASE + [1.0/n for n in _RATIO_BASE]))
 
 
 def load_master():
@@ -78,7 +75,7 @@ def latest_date(df, ticker=None):
         return None
 
 
-def batch_download(tickers, period="10d"):
+def batch_download(tickers, period="15d"):
     for attempt in range(3):
         try:
             df = yf.download(
@@ -109,18 +106,18 @@ def fetch_usdjpy():
 
 
 def estimate_ratio(us_df, jp_df, us_ticker, jp_ticker, fx, n_days=5):
-    """過去n日間のデータからADR比率を推定し、標準値に丸める。"""
+    """過去n日（当日除く）の中央値を比率として返す。丸めない。"""
     try:
         us_series = get_close_series(us_df, us_ticker)
         jp_series = get_close_series(jp_df, jp_ticker)
         if us_series is None or jp_series is None:
             return None
-        if len(us_series) == 0 or len(jp_series) == 0:
+        if len(us_series) < 2 or len(jp_series) < 2:
             return None
 
-        m = min(n_days, len(us_series), len(jp_series))
+        m = min(n_days + 1, len(us_series), len(jp_series))
         ratios = []
-        for i in range(1, m + 1):
+        for i in range(2, m + 1):
             u = _scalar(us_series.iloc[-i])
             j = _scalar(jp_series.iloc[-i])
             if u and j and u > 0 and j > 0:
@@ -130,12 +127,7 @@ def estimate_ratio(us_df, jp_df, us_ticker, jp_ticker, fx, n_days=5):
             return None
 
         ratios.sort()
-        median = ratios[len(ratios) // 2]
-        if median <= 0:
-            return None
-
-        best = min(STANDARD_RATIOS, key=lambda c: abs(c - median) / c)
-        return best
+        return ratios[len(ratios) // 2]
     except Exception:
         return None
 
@@ -195,13 +187,13 @@ def main():
     print(f"[info] USD/JPY = {fx:.4f}", flush=True)
 
     print(f"[info] fetching {len(us_tickers)} US ADRs ...", flush=True)
-    us_df = batch_download(us_tickers, period="10d")
+    us_df = batch_download(us_tickers, period="15d")
     if us_df.empty:
         print("[error] US ADR fetch failed", file=sys.stderr, flush=True)
         return 1
 
     print(f"[info] fetching {len(jp_tickers)} Tokyo stocks ...", flush=True)
-    jp_df = batch_download(jp_tickers, period="10d")
+    jp_df = batch_download(jp_tickers, period="15d")
     if jp_df.empty:
         print("[error] Tokyo stocks fetch failed", file=sys.stderr, flush=True)
         return 1
