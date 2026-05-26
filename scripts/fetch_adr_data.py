@@ -1,9 +1,6 @@
-"""
-日本株ADR乖離率データ取得スクリプト
-"""
+"""日本株ADR乖離率データ取得スクリプト（自動比率推定版）"""
 
 from __future__ import annotations
-
 import json
 import sys
 import time
@@ -13,15 +10,16 @@ from pathlib import Path
 import pandas as pd
 import yfinance as yf
 
-
 ROOT = Path(__file__).resolve().parent.parent
 MASTER_PATH = ROOT / "scripts" / "adr_list.json"
 OUTPUT_PATH = ROOT / "public" / "adr-data.json"
-
 JST = timezone(timedelta(hours=9))
 
+_RATIO_BASE = [1, 2, 2.5, 4, 5, 8, 10, 20, 25, 50, 100, 200, 500, 1000]
+STANDARD_RATIOS = sorted(set(_RATIO_BASE + [1.0/n for n in _RATIO_BASE]))
 
-def load_master() -> dict:
+
+def load_master():
     with MASTER_PATH.open("r", encoding="utf-8") as f:
         return json.load(f)
 
@@ -39,7 +37,7 @@ def _scalar(val):
         return None
 
 
-def latest_close(df, ticker=None):
+def get_close_series(df, ticker=None):
     try:
         if df is None or df.empty:
             return None
@@ -48,50 +46,35 @@ def latest_close(df, ticker=None):
             if ticker in lvl0:
                 sub = df[ticker]
                 if "Close" in sub.columns:
-                    series = sub["Close"].dropna()
-                else:
-                    return None
+                    return sub["Close"].dropna()
             elif "Close" in lvl0:
                 close = df["Close"]
                 if ticker in close.columns:
-                    series = close[ticker].dropna()
-                else:
-                    return None
-            else:
-                return None
+                    return close[ticker].dropna()
+            return None
         else:
             close = df["Close"]
             if isinstance(close, pd.DataFrame):
                 close = close.iloc[:, 0]
-            series = close.dropna()
-        if len(series) == 0:
-            return None
-        return _scalar(series.iloc[-1])
-    except (KeyError, AttributeError, IndexError, TypeError):
+            return close.dropna()
+    except Exception:
         return None
 
 
+def latest_close(df, ticker=None):
+    series = get_close_series(df, ticker)
+    if series is None or len(series) == 0:
+        return None
+    return _scalar(series.iloc[-1])
+
+
 def latest_date(df, ticker=None):
+    series = get_close_series(df, ticker)
+    if series is None or len(series) == 0:
+        return None
     try:
-        if df is None or df.empty:
-            return None
-        if ticker and isinstance(df.columns, pd.MultiIndex):
-            lvl0 = set(df.columns.get_level_values(0))
-            if ticker in lvl0:
-                series = df[ticker]["Close"].dropna()
-            elif "Close" in lvl0:
-                series = df["Close"][ticker].dropna()
-            else:
-                return None
-        else:
-            close = df["Close"]
-            if isinstance(close, pd.DataFrame):
-                close = close.iloc[:, 0]
-            series = close.dropna()
-        if len(series) == 0:
-            return None
         return series.index[-1].strftime("%Y-%m-%d")
-    except (KeyError, AttributeError, IndexError):
+    except Exception:
         return None
 
 
@@ -99,17 +82,13 @@ def batch_download(tickers, period="10d"):
     for attempt in range(3):
         try:
             df = yf.download(
-                tickers,
-                period=period,
-                progress=False,
-                group_by="ticker",
-                auto_adjust=False,
-                threads=True,
+                tickers, period=period, progress=False,
+                group_by="ticker", auto_adjust=False, threads=True,
             )
             if df is not None and not df.empty:
                 return df
         except Exception as e:
-            print(f"[warn] batch download attempt {attempt + 1} failed: {e}", file=sys.stderr)
+            print(f"[warn] batch download attempt {attempt + 1} failed: {e}", file=sys.stderr, flush=True)
         time.sleep(5)
     return pd.DataFrame()
 
@@ -125,15 +104,45 @@ def fetch_usdjpy():
             return None
         return _scalar(close.iloc[-1])
     except Exception as e:
-        print(f"[error] USD/JPY fetch failed: {e}", file=sys.stderr)
+        print(f"[error] USD/JPY fetch failed: {e}", file=sys.stderr, flush=True)
+        return None
+
+
+def estimate_ratio(us_df, jp_df, us_ticker, jp_ticker, fx, n_days=5):
+    """過去n日間のデータからADR比率を推定し、標準値に丸める。"""
+    try:
+        us_series = get_close_series(us_df, us_ticker)
+        jp_series = get_close_series(jp_df, jp_ticker)
+        if us_series is None or jp_series is None:
+            return None
+        if len(us_series) == 0 or len(jp_series) == 0:
+            return None
+
+        m = min(n_days, len(us_series), len(jp_series))
+        ratios = []
+        for i in range(1, m + 1):
+            u = _scalar(us_series.iloc[-i])
+            j = _scalar(jp_series.iloc[-i])
+            if u and j and u > 0 and j > 0:
+                ratios.append(u * fx / j)
+
+        if not ratios:
+            return None
+
+        ratios.sort()
+        median = ratios[len(ratios) // 2]
+        if median <= 0:
+            return None
+
+        best = min(STANDARD_RATIOS, key=lambda c: abs(c - median) / c)
+        return best
+    except Exception:
         return None
 
 
 def compute_divergence(adr, us_df, jp_df, fx):
     us_ticker = adr["ticker"]
     jp_ticker = adr["jp_ticker"]
-    ratio = float(adr.get("adr_ratio", 1.0))
-
     if not jp_ticker:
         return None
 
@@ -142,8 +151,12 @@ def compute_divergence(adr, us_df, jp_df, fx):
     us_date = latest_date(us_df, us_ticker)
     jp_date = latest_date(jp_df, jp_ticker)
 
-    if us_close is None or jp_close is None or jp_close <= 0 or ratio <= 0:
+    if us_close is None or jp_close is None or jp_close <= 0:
         return None
+
+    ratio = estimate_ratio(us_df, jp_df, us_ticker, jp_ticker, fx)
+    if ratio is None or ratio <= 0:
+        ratio = float(adr.get("adr_ratio", 1.0))
 
     ny_implied_jp = (us_close * fx) / ratio
     divergence_pct = (ny_implied_jp / jp_close - 1.0) * 100.0
@@ -155,6 +168,7 @@ def compute_divergence(adr, us_df, jp_df, fx):
         "name_jp": adr["name_jp"],
         "level": adr["level"],
         "exchange": adr.get("exchange", ""),
+        "adr_ratio": round(ratio, 4),
         "us_close_usd": round(us_close, 2),
         "jp_close_jpy": round(jp_close, 1),
         "ny_implied_jpy": round(ny_implied_jp, 1),
@@ -166,7 +180,6 @@ def compute_divergence(adr, us_df, jp_df, fx):
 
 def main():
     print(f"[info] fetch start: {datetime.now(JST).isoformat()}", flush=True)
-
     master = load_master()
     adrs = master["adrs"]
     print(f"[info] master count: {len(adrs)}", flush=True)
@@ -201,17 +214,15 @@ def main():
             skipped.append(adr["ticker"])
         else:
             results.append(row)
-
     print(f"[info] computed: {len(results)} / skipped: {len(skipped)}", flush=True)
 
     anomalies = [r for r in results if abs(r["divergence_pct"]) > 15.0]
     if anomalies:
         print(f"[warn] {len(anomalies)} anomalies (>15%):", flush=True)
-        for a in sorted(anomalies, key=lambda x: abs(x["divergence_pct"]), reverse=True):
-            print(f"  {a['ticker']} ({a['jp_ticker']}) {a['name_jp']}: {a['divergence_pct']:+.2f}%", flush=True)
+        for a in sorted(anomalies, key=lambda x: abs(x["divergence_pct"]), reverse=True)[:10]:
+            print(f"  {a['ticker']} ({a['jp_ticker']}) {a['name_jp']}: ratio={a['adr_ratio']}, divergence={a['divergence_pct']:+.2f}%", flush=True)
 
     results.sort(key=lambda x: x["divergence_pct"], reverse=True)
-
     best = results[:20]
     worst = list(reversed(results[-20:])) if len(results) >= 20 else list(reversed(results))
 
