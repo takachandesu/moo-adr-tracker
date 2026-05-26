@@ -1,0 +1,216 @@
+<!-- ====================================================================
+     日本株ADR 乖離率ウィジェット v2
+     列順: 日本コード / 日本名 / 東証引値 / ADR換算引値 / 騰落率
+     WordPressのカスタムHTMLブロックに、このコード全体をそのまま貼り付け。
+     ==================================================================== -->
+
+<style>
+.adr-widget { font-family: -apple-system, BlinkMacSystemFont, "Hiragino Kaku Gothic ProN", "Yu Gothic UI", Meiryo, sans-serif; color: #222; max-width: 820px; margin: 0 auto; }
+.adr-widget * { box-sizing: border-box; }
+.adr-widget__header { margin-bottom: 1rem; }
+.adr-widget__title { font-size: 20px; font-weight: 600; margin: 0 0 4px; }
+.adr-widget__desc { font-size: 12px; color: #666; line-height: 1.6; margin: 0; }
+.adr-widget__meta { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: 12px 0; padding: 10px 14px; background: #f5f5f3; border-radius: 8px; font-size: 12px; color: #444; }
+.adr-widget__meta span.sep { color: #ccc; }
+.adr-widget__tabs { display: flex; gap: 8px; margin-bottom: 12px; }
+.adr-widget__tab { padding: 8px 16px; background: #fff; border: 1px solid #e0e0e0; border-radius: 8px; font-size: 14px; cursor: pointer; color: #666; font-weight: 500; transition: all .15s; }
+.adr-widget__tab:hover { background: #f8f8f8; }
+.adr-widget__tab.is-active { background: #1a1a1a; color: #fff; border-color: #1a1a1a; }
+.adr-widget__table-wrap { background: #fff; border: 1px solid #e8e8e8; border-radius: 12px; overflow: hidden; overflow-x: auto; }
+.adr-widget__table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.adr-widget__table thead th { background: #f8f8f5; color: #555; font-weight: 600; font-size: 11px; text-align: left; padding: 10px 12px; border-bottom: 1px solid #e8e8e8; letter-spacing: 0.02em; white-space: nowrap; }
+.adr-widget__table thead th.num { text-align: right; }
+.adr-widget__table tbody tr { border-bottom: 1px solid #f0f0ec; }
+.adr-widget__table tbody tr:last-child { border-bottom: none; }
+.adr-widget__table tbody tr:hover { background: #fafaf7; }
+.adr-widget__table td { padding: 10px 12px; vertical-align: middle; }
+.adr-widget__table td.num { text-align: right; font-family: ui-monospace, "SF Mono", Consolas, monospace; font-variant-numeric: tabular-nums; }
+.adr-widget__rank { color: #999; font-size: 11px; width: 28px; text-align: right; padding-right: 4px; }
+.adr-widget__jpcode { font-family: ui-monospace, "SF Mono", Consolas, monospace; color: #555; font-size: 12px; white-space: nowrap; }
+.adr-widget__nm-jp { font-size: 13px; color: #1a1a1a; font-weight: 500; line-height: 1.3; }
+.adr-widget__nm-en { font-size: 10px; color: #888; line-height: 1.3; margin-top: 1px; }
+.adr-widget__ticker-us { font-family: ui-monospace, "SF Mono", Consolas, monospace; font-size: 10px; color: #aaa; margin-top: 1px; }
+.adr-widget__badge { display: inline-block; font-size: 9px; padding: 2px 5px; border-radius: 4px; font-weight: 700; letter-spacing: 0.02em; margin-left: 4px; vertical-align: 1px; }
+.adr-widget__badge--l3 { background: #EEEDFE; color: #3C3489; }
+.adr-widget__badge--l2 { background: #E6F1FB; color: #0C447C; }
+.adr-widget__badge--l1 { background: #F1EFE8; color: #555; }
+.adr-widget__pct { font-size: 14px; font-weight: 700; }
+.adr-widget__pct--up { color: #1a7f37; }
+.adr-widget__pct--down { color: #c0392b; }
+.adr-widget__pct-cell { background: #fafff8; }
+.adr-widget__pct-cell.dn { background: #fff5f3; }
+.adr-widget__note { margin-top: 14px; padding: 12px 14px; background: #f0f7ff; border-radius: 8px; font-size: 12px; line-height: 1.7; color: #2c5282; }
+.adr-widget__note-title { font-weight: 600; margin-bottom: 6px; }
+.adr-widget__note-badges span { display: inline-block; margin-right: 12px; margin-bottom: 4px; }
+.adr-widget__caution { margin-top: 12px; padding: 10px 14px; font-size: 11px; color: #888; line-height: 1.6; }
+.adr-widget__loading, .adr-widget__error { padding: 40px 20px; text-align: center; color: #888; font-size: 13px; }
+.adr-widget__error { color: #c0392b; }
+
+@media (max-width: 600px) {
+  .adr-widget__table { font-size: 12px; }
+  .adr-widget__table thead th, .adr-widget__table td { padding: 8px 6px; }
+  .adr-widget__rank { display: none; }
+  .adr-widget__table thead th:first-child, .adr-widget__table td:first-child { display: none; }
+  .adr-widget__nm-jp { font-size: 12px; }
+  .adr-widget__nm-en { display: none; }
+  .adr-widget__ticker-us { font-size: 9px; }
+  .adr-widget__pct { font-size: 13px; }
+  .adr-widget__table td.num { font-size: 11px; }
+}
+</style>
+
+<div class="adr-widget" id="adr-widget-root">
+  <div class="adr-widget__header">
+    <h2 class="adr-widget__title">日本株ADR 乖離率ランキング</h2>
+    <p class="adr-widget__desc">NY引け（米東部16:00）の円換算値が、東証引け（前日15:30）からどう動いたかをランキング表示</p>
+  </div>
+
+  <div class="adr-widget__loading" id="adr-widget-loading">データを読み込み中…</div>
+
+  <div id="adr-widget-content" style="display:none;">
+    <div class="adr-widget__meta">
+      <span>📅 更新: <strong id="adr-updated-at">-</strong></span>
+      <span class="sep">|</span>
+      <span>USD/JPY: <strong id="adr-usdjpy">-</strong></span>
+      <span class="sep">|</span>
+      <span>対象: <strong id="adr-count">-</strong>銘柄</span>
+    </div>
+
+    <div class="adr-widget__tabs">
+      <button class="adr-widget__tab is-active" data-tab="best">📈 ベスト20（上昇）</button>
+      <button class="adr-widget__tab" data-tab="worst">📉 ワースト20（下落）</button>
+    </div>
+
+    <div class="adr-widget__table-wrap">
+      <table class="adr-widget__table">
+        <thead>
+          <tr>
+            <th class="adr-widget__rank">#</th>
+            <th>コード</th>
+            <th>銘柄名</th>
+            <th class="num">東証引値</th>
+            <th class="num">ADR換算引値</th>
+            <th class="num">騰落率</th>
+          </tr>
+        </thead>
+        <tbody id="adr-widget-tbody"></tbody>
+      </table>
+    </div>
+
+    <div class="adr-widget__note">
+      <div class="adr-widget__note-title">対象とレベル区分</div>
+      <div class="adr-widget__note-badges">
+        <span><span class="adr-widget__badge adr-widget__badge--l3">L3</span> 米国IPO上場</span>
+        <span><span class="adr-widget__badge adr-widget__badge--l2">L2</span> NYSE/NASDAQ上場</span>
+        <span><span class="adr-widget__badge adr-widget__badge--l1">L1</span> OTC店頭（スポンサー付き／なし含む）</span>
+      </div>
+    </div>
+
+    <div class="adr-widget__caution">
+      ※ 騰落率がプラス＝NY時間中にADRが上昇＝翌朝の東京は寄り高示唆、マイナス＝寄り安示唆。<br>
+      ※ ADR換算引値 = NY終値(USD) × USD/JPY ÷ ADR比率 で算出。<br>
+      ※ レベル3（NASDAQ小型IPO）は出来高が薄く乖離が極端に出やすい点に注意。本ランキングは投資助言ではありません。
+    </div>
+  </div>
+
+  <div class="adr-widget__error" id="adr-widget-error" style="display:none;">
+    データの取得に失敗しました。時間をおいて再度お試しください。
+  </div>
+</div>
+
+<script>
+(function() {
+  // ====================================================================
+  // 設定: JSONファイルのパス（ロリポップ上の adr-data.json）
+  // ====================================================================
+  var DATA_URL = '/adr-data.json';
+
+  var state = { data: null, currentTab: 'best' };
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, function(c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  function fmt(n, decimals) {
+    if (n == null || isNaN(n)) return '-';
+    return Number(n).toLocaleString('ja-JP', {
+      minimumFractionDigits: decimals,
+      maximumFractionDigits: decimals
+    });
+  }
+
+  function badge(level) {
+    return '<span class="adr-widget__badge adr-widget__badge--l' + level + '">L' + level + '</span>';
+  }
+
+  function renderRow(item, rank, isUp) {
+    var pctClass = isUp ? 'adr-widget__pct--up' : 'adr-widget__pct--down';
+    var cellClass = isUp ? 'adr-widget__pct-cell' : 'adr-widget__pct-cell dn';
+    var sign = item.divergence_pct > 0 ? '+' : '';
+    return '<tr>' +
+      '<td class="adr-widget__rank">' + rank + '</td>' +
+      '<td class="adr-widget__jpcode">' + escapeHtml(item.jp_ticker || '-') + '</td>' +
+      '<td>' +
+        '<div class="adr-widget__nm-jp">' + escapeHtml(item.name_jp) + badge(item.level) + '</div>' +
+        '<div class="adr-widget__nm-en">' + escapeHtml(item.name_en) + '</div>' +
+        '<div class="adr-widget__ticker-us">' + escapeHtml(item.ticker) + '</div>' +
+      '</td>' +
+      '<td class="num">' + fmt(item.jp_close_jpy, 1) + '</td>' +
+      '<td class="num">' + fmt(item.ny_implied_jpy, 2) + '</td>' +
+      '<td class="num ' + cellClass + '"><span class="adr-widget__pct ' + pctClass + '">' +
+        sign + item.divergence_pct.toFixed(2) + '%</span></td>' +
+    '</tr>';
+  }
+
+  function renderList() {
+    var tbody = document.getElementById('adr-widget-tbody');
+    var items = state.currentTab === 'best' ? state.data.best : state.data.worst;
+    var isUp = state.currentTab === 'best';
+    var html = items.map(function(item, i) { return renderRow(item, i + 1, isUp); }).join('');
+    tbody.innerHTML = html;
+  }
+
+  function setupTabs() {
+    var tabs = document.querySelectorAll('.adr-widget__tab');
+    tabs.forEach(function(tab) {
+      tab.addEventListener('click', function() {
+        tabs.forEach(function(t) { t.classList.remove('is-active'); });
+        tab.classList.add('is-active');
+        state.currentTab = tab.dataset.tab;
+        renderList();
+      });
+    });
+  }
+
+  function showError() {
+    document.getElementById('adr-widget-loading').style.display = 'none';
+    document.getElementById('adr-widget-error').style.display = 'block';
+  }
+
+  function showContent() {
+    document.getElementById('adr-widget-loading').style.display = 'none';
+    document.getElementById('adr-widget-content').style.display = 'block';
+  }
+
+  fetch(DATA_URL, { cache: 'no-cache' })
+    .then(function(res) {
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      return res.json();
+    })
+    .then(function(data) {
+      state.data = data;
+      document.getElementById('adr-updated-at').textContent = data.updated_at;
+      document.getElementById('adr-usdjpy').textContent = data.usdjpy.toFixed(2);
+      document.getElementById('adr-count').textContent = data.total_count;
+      setupTabs();
+      renderList();
+      showContent();
+    })
+    .catch(function(err) {
+      console.error('[adr-widget] fetch error:', err);
+      showError();
+    });
+})();
+</script>
