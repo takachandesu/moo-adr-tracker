@@ -53,7 +53,7 @@ jobs:
           # 既存ファイルを削除しない
           dangerous-clean-slate: false
           # 同期ステート（差分アップロード用）
-          state-name: .ftp-deploy-sync-state.json
+          state-name: .ftp-deploy-adr.json
 
       - name: Upload artifact (debug)
         if: always()
